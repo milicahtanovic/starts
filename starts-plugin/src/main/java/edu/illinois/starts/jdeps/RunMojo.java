@@ -4,25 +4,17 @@
 
 package edu.illinois.starts.jdeps;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.IOException;
-import java.net.URISyntaxException;
-import java.net.URL;
-import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
 
 import edu.illinois.starts.helpers.Writer;
 import edu.illinois.starts.maven.AgentLoader;
+import edu.illinois.starts.util.ClasspathUtil;
 import edu.illinois.starts.util.Logger;
 import edu.illinois.starts.util.Pair;
 import org.apache.maven.plugin.MojoExecutionException;
@@ -35,6 +27,7 @@ import org.apache.maven.plugins.annotations.ResolutionScope;
  */
 @Mojo(name = "run", requiresDependencyResolution = ResolutionScope.TEST)
 public class RunMojo extends DiffMojo {
+
     /**
      * Set this to "false" to prevent checksums from being persisted to disk. This
      * is useful for "dry runs" where one may want to see the non-affected tests that
@@ -81,11 +74,13 @@ public class RunMojo extends DiffMojo {
     }
 
     protected void run(List<String> excludePaths) throws MojoExecutionException {
-        String sfPathString = cleanClassPath(Writer.pathToString(getSureFireClassPath().getClassPath()));
-        if (retestAll || !checkIfSameClassPath(sfPathString) || !checkIfSameJarChecksums(sfPathString)) {
+        String sfPathString = Writer.pathToString(getSureFireClassPath().getClassPath());
+        String oldSf = ClasspathUtil.readinSfFile(getArtifactsDir() + File.separator + "sf-classpath"); 
+        String oldChecksumPathFileName = getArtifactsDir() + File.separator + "jar-checksums";
+        if (retestAll || !ClasspathUtil.checkIfSameClassPath(sfPathString, oldSf) || !ClasspathUtil.checkIfSameJarChecksums(sfPathString, oldChecksumPathFileName)) {
             dynamicallyUpdateExcludes(new ArrayList<String>());
             Writer.writeClassPath(sfPathString, artifactsDir);
-            Writer.writeJarChecksums(cleanClassPath(sfPathString), artifactsDir);
+            Writer.writeJarChecksums(ClasspathUtil.cleanClassPath(sfPathString), artifactsDir);
         } else {
             dynamicallyUpdateExcludes(excludePaths);
         }
@@ -113,70 +108,5 @@ public class RunMojo extends DiffMojo {
         Pair<Set<String>, Set<String>> data = computeChangeData();
         nonAffectedTests = data == null ? new HashSet<String>() : data.getKey();
         changedClasses  = data == null ? new HashSet<String>() : data.getValue();
-    }
-
-    private boolean checkIfSameClassPath(String sfPathString) throws MojoExecutionException {
-        String oldSfPathFileName = getArtifactsDir() + File.separator + "sf-classpath";
-        Set<String> sfClassPathSet = new HashSet<>(Arrays.asList(sfPathString.split(File.pathSeparator)));
-        if (!new File(oldSfPathFileName).exists()) {
-            return false;
-        }
-        try {
-            String cleanOldSfPathFileName = cleanClassPath(Files.readAllLines(Paths.get(oldSfPathFileName)).get(0));
-            Set<String> oldSfClassPathSet = new HashSet<>(Arrays.asList(cleanOldSfPathFileName.split(":")));
-            if (oldSfClassPathSet.equals(oldSfClassPathSet)) {
-                return true;
-            }
-        } catch (IOException ioe) {
-            ioe.printStackTrace();
-        }
-        return false;
-    }
-
-    private boolean checkIfSameJarChecksums(String cleanSfClassPath) throws MojoExecutionException {
-        String oldChecksumPathFileName = getArtifactsDir() + File.separator + "jar-checksums";
-        Map<String, String> checksumMap = new HashMap<>();
-        boolean noException = true;
-        if (!new File(oldChecksumPathFileName).exists()) {
-            return false;
-        }
-        try (BufferedReader fileReader = new BufferedReader(new FileReader(oldChecksumPathFileName))) {
-            String line;
-            while ((line = fileReader.readLine()) != null) {
-                String[] elems = line.split(",");
-                checksumMap.put(elems[0], elems[1]);
-            }
-            String[] jars = cleanSfClassPath.split(File.pathSeparator);
-            for (int i = 0; i < jars.length; i++) {
-                String[] elems = Writer.getJarToChecksumMapping(jars[i]).split(",");
-                String oldCS = checksumMap.get(elems[0]);
-                if (!elems[1].equals(oldCS)) {
-                    return false;
-                }
-            }
-        } catch (IOException ioe) {
-            noException = false;
-            ioe.printStackTrace();
-        }
-        return noException;
-    }
-
-    private String cleanClassPath(String cp) {
-        String[] paths = cp.split(File.pathSeparator);
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < paths.length; i++) {
-            if (paths[i].contains(File.separator + "target" +  File.separator + "classes")
-                || paths[i].contains(File.separator + "target" + File.separator + "test-classes")
-                || paths[i].contains("-SNAPSHOT.jar")) {
-                continue;
-            }
-            if (sb.length() == 0) {
-                sb.append(paths[i]);
-            } else {
-                sb.append(File.pathSeparator);
-                sb.append(paths[i]);
-            }
-        }
-        return sb.toString();
     }
 }
